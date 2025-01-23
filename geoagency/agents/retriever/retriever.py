@@ -11,7 +11,7 @@ import time
 class RepoRetriever:
     def __init__(self):
         self.repos = {}
-        self.reranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="/opt")
+        self.reranker = Ranker(model_name="ms-marco-TinyBERT-L-2-v2", cache_dir="/opt")
 
     def add_repo(self,
                  name: str,
@@ -52,6 +52,7 @@ class RepoRetriever:
         Perform a health check on a single repository.
 
         :param repo_name: Name of the repository.
+
         :return: A dictionary containing the health check result.
         """
         repo = self.repos.get(repo_name)
@@ -79,6 +80,7 @@ class RepoRetriever:
         :param repo_name: Name of the repository.
         :param endpoint: API endpoint for the repository.
         :param params: Query parameters for the request.
+
         :return: Response JSON or an error message.
         """
         repo = self.repos.get(repo_name)
@@ -118,15 +120,21 @@ class RepoRetriever:
     def format_response(self, response: dict, repo_name: str) -> dict:
         """
         Format the response JSON for a repository.
+
+        :param response: Response JSON from the repository.
+        :param repo_name: Name of the repository.
+
+        :return: A list of dictionaries containing the formatted results.
         """
         results = [
             {
                 'id': item.get('id') or item.get('metadata', {}).get('doi', ''),
                 'source': repo_name,
-                'title': item.get('title') or item.get('metadata', {}).get('title', ''),
-                'description': item.get('description') or item.get('metadata', {}).get('description', ''),
+                # 'title': item.get('title') or item.get('metadata', {}).get('title', ''),
+                # 'description': item.get('description') or item.get('metadata', {}).get('description', ''),
                 'text': f"{item.get('title') or item.get('metadata', {}).get('title', '')} - "
-                        f"{item.get('description') or item.get('metadata', {}).get('description', '')}".strip(" -")
+                        f"{item.get('description') or item.get('metadata', {}).get('description', '')}".strip(" -"),
+                'meta': item
             }
             for item in response
         ]
@@ -135,6 +143,11 @@ class RepoRetriever:
     def rerank_results(self, query: str, results: list) -> list:
         """
         Rerank the results using a reranker model.
+
+        :param query: Query string.
+        :param results: A list of dictionaries containing the search results.
+
+        :return: A list of dictionaries containing the reranked results.
         """
         start_time = time.perf_counter()
         rerank_request = RerankRequest(
@@ -197,7 +210,6 @@ class RepoRetriever:
                 # logger.info(
                 #    f"---Result_titles: {[r.get('title', '') for r in extracted_data]}")
                 
-
             else:
                 logger.error(f"Could not extract data for {repo_name}, response keys path: {response_keys}")
 

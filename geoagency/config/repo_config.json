@@ -1,26 +1,6 @@
 {
     "repositories": {
-        "data-europe": {
-            "description": "European Data Portal: data repository for all disciplines on a European scope",
-            "base_url": "https://data.europa.eu/api/hub/search/search",
-            "params": {
-                "filter": "dataset",
-                "page": 0,
-                "limit": 20,
-                "sort": "relevance+desc, modified+desc, title.en+asc",
-                "facetOperator": "AND",
-                "facetGroupOperator": "AND",
-                "dataServices": "false",
-                "includes": "id,title.en,description.en,languages,modified,issued,catalog.id,catalog.title,catalog.country.id,distributions.id,distributions.format.label,distributions.format.id,distributions.license,categories.label,publisher",
-                "facets": "%7B%22is_hvd%22:[],%22hvdCategory%22:[],%22country%22:[],%22publisher%22:[],%22catalog%22:[],%22format%22:[],%22categories%22:[],%22keywords%22:[],%22subject%22:[],%22license%22:[],%22superCatalog%22:[]%7D"
-            },
-            "response_keys": {
-                "path": [
-                    "result",
-                    "results"
-                ]
-            }
-        },
+
         "zenodo": {
             "description": "Zenodo: research repository for all disciplines",
             "base_url": "https://zenodo.org/api/records",
