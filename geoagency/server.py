@@ -15,8 +15,7 @@ from .llm_manager import LLMManager
 
 llm = LLMManager.get_llm()
 
-
-from .retriever.retriever import RepoRetriever
+from .agents.retriever.retriever import RepoRetriever
 
 # Initialize retriever and configuration
 retriever = RepoRetriever()
@@ -38,12 +37,17 @@ for repo_name, repo_config in repos_config.items():
 health_check_results = retriever.health_check()
 logger.info(f"Health check results: {health_check_results}")
 
+for repo_name, health_status in health_check_results.items():
+    if health_status.get("status") != "healthy":
+        retriever.repos.pop(repo_name)
+        logger.info(f"Repository '{repo_name}' unattached from retriever as connection unhealthy.")
+
 app = FastAPI()
 
 
 @app.get("/test_llm")
 def read_root(query: str) -> dict:
-    return {query: call_agent(query)}
+    return {query: call_agent(query, retriever)}
 
 @app.get("/retrieve_metadata")
 async def retrieve_metadata(query: str) -> dict:

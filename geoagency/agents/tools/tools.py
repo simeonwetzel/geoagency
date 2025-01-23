@@ -1,50 +1,38 @@
-from smolagents import DuckDuckGoSearchTool, tools
-
+from smolagents import DuckDuckGoSearchTool, tool
+from loguru import logger
+from ..retriever.retriever import RepoRetriever
 
 @tool
-def get_data_from_nfdi(query: str) -> dict:
+def retrieve_metadata(query: str, retriever: RepoRetriever) -> dict:
     """
-    Get data from NFDI4Earth the repository for Earth System Sciences related datasets.
+    This tool can be used to retrieve metadata from different repositories.
 
-    Args: 
-        query (str): The query to search for.
+    The output can be used to briefly summarize the top 5 results from the query.
 
-    Returns:
-        dict: The data from NFDI4Earth.
+    Args:
+        query: The query string to search for.
+        retriever: An instance of the RepoRetriever class.
     """
-    BASE_URL = "https://onestop4all.nfdi4earth.de/solr/metadata/"
+    import asyncio
+    response = asyncio.run(retriever.query_all_repos(query))
 
+    top_5_results = response.get("results", [])[:5]
+    return top_5_results
 
-    # Query parameters
-    params = {
-        "ident": "true",
-        "q.op": "OR",
-        "defType": "edismax",
-        "bq": "isEdutrain:true^1000",
-        "q": "climate adaptation",
-        "qf": "title^1 keyword^50 collector",
-        "fl": "*, [child author]",
-        "fq": [
-            "type:\"http://www.w3.org/ns/dcat#Dataset\"",
-            "type:(\"http://www.w3.org/ns/dcat#Dataset\")"
-        ],
-        "rows": 20,
-        "start": 0,
-        "facet": "true",
-        "facet.field": [
-            "type",
-            "subjectArea_str",
-            "dataAccessType",
-            "contentType_str",
-            "dataUploadType",
-            "supportsMetadataStandard_str",
-            "software_license_str",
-            "assignsIdentifierScheme"
-        ],
-        "facet.range": "datePublished",
-        "facet.range.start": "2000-01-01T00:00:00Z",
-        "facet.range.end": "2024-01-01T00:00:00Z",
-        "facet.range.gap": "+1YEAR"
-    }
-    
-    return {}
+@tool
+def format_metadata_results(results: dict) -> str:
+    """
+    This tool can be used to format the metadata results.
+
+    Also describe the metadata results.
+
+    Args:
+        results: The metadata results to format.
+    """
+    formatted_results = ""
+    for idx, result in enumerate(results):
+        formatted_results += f"Result {idx + 1}:\n"
+        formatted_results += f"Text: {result.get('text', 'N/A')}\n"
+        formatted_results += f"Source Repository: {result.get('source', 'N/A')}\n"
+
+    return formatted_results
