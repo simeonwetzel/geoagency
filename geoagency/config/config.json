@@ -5,7 +5,7 @@
     "llm": {
         "provider": "huggingface",
         "model_id": "Qwen/Qwen2.5-Coder-32B-Instruct",
-        "api_token": "",
+        "api_token": "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",
         "temperature": 0
     }
 }
