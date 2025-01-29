@@ -4,7 +4,7 @@ import requests
 from loguru import logger
 from flashrank import Ranker, RerankRequest
 import time
-
+from ...config.config import CONFIG
 
 
 
@@ -12,6 +12,21 @@ class RepoRetriever:
     def __init__(self):
         self.repos = {}
         self.reranker = Ranker(model_name="ms-marco-TinyBERT-L-2-v2", cache_dir="/opt")
+        
+        repos_config = CONFIG.repos.get("repositories")
+        logger.info("Retriever initialized")
+
+        # Add repositories to retriever
+        for repo_name, repo_config in repos_config.items():
+            logger.info(f"Adding repo to retriever: {repo_name}")
+            self.add_repo(
+                name=repo_name,
+                base_url=repo_config.get("base_url"),
+                params=repo_config.get("params"),
+                headers=repo_config.get("headers"),
+                response_keys=repo_config.get("response_keys")
+            )
+
 
     def add_repo(self,
                  name: str,
