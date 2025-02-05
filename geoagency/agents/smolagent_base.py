@@ -32,7 +32,6 @@ class MetadataRetrieverAgent(CodeAgent):
             match = re.search(r"Execution logs:\n(.*)\nLast output from code snippet:", log_entry.observations, re.DOTALL)
             if match:
                 try:
-                    logger.debug(f"log_entry.observations: {log_entry.observations}")
                     log_content = match.group(1)
                     log_dict = ast.literal_eval(log_content)
                     structured_data = log_dict.get('structured_data', [])
@@ -41,7 +40,7 @@ class MetadataRetrieverAgent(CodeAgent):
                 except (SyntaxError, ValueError) as e:
                     logger.warning(f"Error parsing structured data: {e}")
             else:
-                print("No structured data found.")
+                logger.info("No structured data found.")
                     
 retriever = RepoRetriever()  
 metadata_retriever_agent = MetadataRetrieverAgent(
@@ -51,44 +50,8 @@ metadata_retriever_agent = MetadataRetrieverAgent(
     system_prompt=f"""Your task is to retrieve metadata. Only do a one-shot search (not multiple times)!\n {CODE_SYSTEM_PROMPT}""",
     max_steps=3,
     verbosity_level=1,
-    #step_callbacks=[MetadataRetrieverAgent.collect_search_results]
-    #step_callbacks=[]
 )
 
-# osm_agent = CodeAgent(
-#     tools=[overpass_tool, get_osm_feature_as_geojson_by_name],
-#     model=llm,
-#     additional_authorized_imports=["requests", "json", "pandas"]
-# )
-
-# # # Make managed agents that will be used by the manager agent
-# managed_metadata_agent = ManagedAgent(
-#      agent=metadata_retriever_agent,
-#      name="metadata_retriever",
-#      description="Retrieves metadata using a retriever tool",
-#      # managed_agent_prompt=MANAGED_AGENT_PROMPT + """Always use the query as is, do not modify it or hallucinate search criteria.""",
-#      # additional_prompting
-# )
-
-# managed_osm_agent = ManagedAgent(
-#     agent=osm_agent,
-#     name="osm_agent",
-#     description="Can retrieve data from Open Street Map (OSM) using the Overpass API",
-# )
-
-# # Manager agent
-# manager_agent = CodeAgent(
-#     tools=[],
-#     model=llm,
-#     managed_agents=[managed_metadata_agent,
-#                     # managed_osm_agent,
-#                     ],
-#     max_steps=2,
-#     verbosity_level=1
-# )
-# manager_agent.system_prompt = manager_agent.system_prompt + """
-# For each dataset/metadata query do a single request and show the results.
-# """
 
 def call_agent(query: str) -> str:
     # return manager_agent.run(query)   
