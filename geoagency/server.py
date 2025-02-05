@@ -25,9 +25,10 @@ app = FastAPI()
 
 @app.get("/test_llm")
 def read_root(query: str) -> dict:
-    answer = call_agent(query)
+    answer, search_results = call_agent(query)
     # logger.debug(f"State: {logs}")
-    return {"answer": answer}
+    return {"answer": answer, 
+            "search_results": search_results}
 
 @app.get("/retrieve_metadata")
 async def retrieve_metadata(query: str) -> dict:

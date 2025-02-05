@@ -1,12 +1,13 @@
 from smolagents import DuckDuckGoSearchTool, tool, Tool
 from loguru import logger
-from ..retriever.retriever import RepoRetriever
+from geoagency.agents.retriever.retriever import RepoRetriever
+from tomark import Tomark
 
 class MetadataRetrieverTool(Tool):
     name = "retrieve_metadata"
     description = """
     This tool can be used to retrieve metadata from different repositories.
-    The output can be used to briefly summarize the top 3 results from the query.
+    It then shows the top 3 search results.
     """
     inputs = {
         "query": {
@@ -25,19 +26,20 @@ class MetadataRetrieverTool(Tool):
 
         top_3_results = response.get("results", [])[:3]
         
-        formatted_results = ""
-        for idx, result in enumerate(top_3_results):
-            formatted_results += f"Result {idx + 1}:\n"
-            formatted_results += f"Text: {result.get('text', 'N/A')}\n"
-            formatted_results += f"Source Repository: {result.get('source', 'N/A')}\n"
-            
-        return formatted_results
+        for r in top_3_results:
+            r.pop('meta')
 
+        formatted_results = Tomark.table(top_3_results)
+            
+        return {
+            "formatted_string": f"Here is a table including the top-3 search results:\n {formatted_results}",
+            "structured_data": top_3_results
+        }
 
 @tool
 def clarify_search_criteria(query: str) -> str:
     """
-    Ask for clarification if the search criteria are not clear instead of conducting a search. 
+    Ask for clarification if the search criteria are not clear INSTEAD of conducting a search. 
     
     Consider spatial, thematic or temporal criteria depending on the context.
     
