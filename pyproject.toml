@@ -17,6 +17,8 @@ nest-asyncio = "^1.6.0"
 flashrank = "^0.2.10"
 shapely = "^2.0.7"
 tomark = "^0.1.4"
+gradio = "^5.15.0"
+json5 = "^0.10.0"
 
 
 [build-system]

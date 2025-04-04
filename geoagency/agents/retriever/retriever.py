@@ -8,6 +8,7 @@ import shapely
 from ...config.config import CONFIG
 from typing import Any
 
+
 def get_nested_value(d, keys, default=None):
     for key in keys:
         if isinstance(d, dict) and key in d:
@@ -41,6 +42,7 @@ class RepoRetriever:
                 headers=repo_config.get("headers"),
                 response_keys=repo_config.get("response_keys"),
                 geometry_field=repo_config.get("geometry_field"),
+                source_url_field=repo_config.get("source_url_field"),
             )
 
     def add_repo(self,
@@ -50,7 +52,8 @@ class RepoRetriever:
                  params: dict = None,
                  headers: dict = None,
                  response_keys: list = None,
-                 geometry_field: list = None) -> None:
+                 geometry_field: list = None,
+                 source_url_field: str = None) -> None:
         """
         Add a repository configuration.
 
@@ -68,6 +71,7 @@ class RepoRetriever:
             "headers": headers or {},
             "response_keys": response_keys or {},
             "geometry_field_path": geometry_field or {},
+            "source_url_field": source_url_field or "",
         }
 
     def health_check(self) -> dict:
@@ -163,24 +167,95 @@ class RepoRetriever:
             results = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
             return {key: result for (key, _), result in zip(tasks, results)}
 
+    async def query_multiple_repos(self, queries: list, limit: int=None) -> dict:
+        """
+        Retrieve metadata for multiple queries from all repositories asynchronously.
+
+        :param queries: List of query strings.
+        :param limit: Limit the number of results returned per query
+        :return: A dictionary containing results grouped by query.
+        """
+        logger.info(f"Start retrieving metadata for queries: {queries}")
+
+        start_time = time.perf_counter()
+
+        # Construct requests for all queries across all repositories
+        requests = [
+            {"repo_name": repo_name, "params": {**self.repos[repo_name]["params"], self.repos[repo_name]["query_key"]: q}}
+            for q in queries for repo_name in self.repos
+        ]
+
+        # Fetch all responses concurrently
+        responses = await self.retrieve_async(requests)
+
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        logger.info(f"Time taken to retrieve metadata: {elapsed_time:.2f} seconds")
+
+        # Process responses and organize results by query
+        query_results = {q: {} for q in queries}
+
+        for request_key, response in responses.items():
+            repo_name, query = request_key.split(":")
+            response_keys = self.repos[repo_name].get("response_keys", {}).get("path", [])
+
+            extracted_data = response
+            for key in response_keys:
+                if isinstance(extracted_data, dict) and key in extracted_data:
+                    extracted_data = extracted_data[key]
+                else:
+                    logger.warning(f"Key '{key}' not found in response for {repo_name}")
+                    extracted_data = None
+                    break
+
+            if extracted_data is not None:
+                query_results[query][repo_name] = self.format_response(extracted_data, repo_name)
+                logger.info(f"Repo: {repo_name}, Query: {query}, Retrieved {len(extracted_data)} results")
+
+            else:
+                query_results[query][repo_name] = []
+                logger.error(f"Could not extract data for {repo_name}, response keys path: {response_keys}")
+
+        # Rerank results per query
+        for query in queries:
+            all_results = [result for repo_results in query_results[query].values() for result in repo_results]
+            reranked_results = self.rerank_results(query, all_results)
+            for result in reranked_results:
+                if 'score' in result:
+                    result['score'] = float(result['score'])
+            if limit:
+                reranked_results_cutoff = reranked_results[:limit]
+                query_results[query] = reranked_results_cutoff
+            else:
+                query_results[query] = reranked_results
+
+        return query_results
+
+
     def _geometry_to_geojson(self, geometry: Any) -> dict:
         if geometry:
             if isinstance(geometry, str):
                 geometry = shapely.from_wkt(geometry=geometry)
                 return shapely.to_geojson(geometry=geometry)
+            if isinstance(geometry, list):
+                geometry = geometry[0]
             if isinstance(geometry, dict):
                 if 'min' in geometry and 'max' in geometry:
                     # Assuming geometry is a bounding box like
                     # {"min": {"x": -17.15, "y": 36.93}, "max": {"x": 42.95, "y": 57.73}}
                     polygon = shapely.Polygon([
-                        (geometry["min"]["x"], geometry["min"]["y"]),  # Bottom-left
-                        (geometry["max"]["x"], geometry["min"]["y"]),  # Bottom-right
-                        (geometry["max"]["x"], geometry["max"]["y"]),  # Top-right
-                        (geometry["min"]["x"], geometry["max"]["y"]),  # Top-left
+                        # Bottom-left
+                        (geometry["min"]["x"], geometry["min"]["y"]),
+                        # Bottom-right
+                        (geometry["max"]["x"], geometry["min"]["y"]),
+                        # Top-right
+                        (geometry["max"]["x"], geometry["max"]["y"]),
+                        (geometry["min"]["x"],
+                         geometry["max"]["y"]),  # Top-left
                         # Close the polygon
                         (geometry["min"]["x"], geometry["min"]["y"])
                     ])
-                    return shapely.to_geojson(geometry=polygon.wkt)
+                    return shapely.to_geojson(geometry=polygon)
             return ''
 
     def format_response(self, response: dict, repo_name: str) -> dict:
@@ -195,19 +270,25 @@ class RepoRetriever:
         # Get the keys of the geometry field within the result object
         geometry_field_path = self.repos.get(repo_name, {}).get(
             "geometry_field_path", {}).get("path", [])
+        
+        source_url_field = self.repos.get(repo_name, {}).get(
+            "source_url_field", "")
+         
 
         logger.info(f"Geometry field path is {geometry_field_path}")
+        logger.info(f"Source URL field is: {source_url_field}")
 
         results = [
             {
                 'id': item.get('id') or item.get('metadata', {}).get('doi', ''),
-                'source': repo_name,
+                'source': item.get(source_url_field) or repo_name,
                 # 'title': item.get('title') or item.get('metadata', {}).get('title', ''),
                 # 'description': item.get('description') or item.get('metadata', {}).get('description', ''),
                 'text': f"{item.get('title') or item.get('metadata', {}).get('title', '')} - "
                         f"{item.get('description') or item.get('metadata', {}).get('description', '')}".strip(
                             " -"),
-                'geometry_geojson': self._geometry_to_geojson(get_nested_value(item, geometry_field_path)) or "",
+                'geometry_geojson': self._geometry_to_geojson(get_nested_value(item, geometry_field_path))
+                if geometry_field_path else "" or "",
                 'meta': item,
             }
             for item in response
