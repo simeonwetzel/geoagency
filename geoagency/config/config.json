@@ -1,11 +1,10 @@
 {
-    "OPENAI_API_KEY": "",
+    "OPENAI_API_KEY": "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",
     "TAVILY_API_KEY": "",
     "GROQ_API_KEY": "",
     "llm": {
-        "provider": "huggingface",
-        "model_id": "Qwen/Qwen2.5-Coder-32B-Instruct",
-        "api_token": "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",
+        "provider": "openai",
+        "HF_API_KEY": "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",
         "temperature": 0
     }
 }

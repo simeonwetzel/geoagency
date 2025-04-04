@@ -1,47 +1,19 @@
 {
     "repositories": {
-
-        "zenodo": {
-            "description": "Zenodo: research repository for all disciplines",
-            "base_url": "https://zenodo.org/api/records",
-            "params": {
-                "sort": "bestmatch",
-                "size": 20
-            },
-            "response_keys": {
-                "path": [
-                    "hits",
-                    "hits"
-                ]
-            }
-        },
         "nfdi": {
             "description": "NFDI4Earth Metadata Repository: data repository for earth sciences",
-            "base_url": "https://onestop4all.nfdi4earth.de/solr/metadata/select",
-            "headers": {
-                "Authorization": "Basic bjRlX2FkbWluOm0mWWcoeGNGYXloey4yYnY="
-            },
+            "base_url": "http://172.26.62.26:8983/solr/test_collection/select",
             "params": {
+                "q": "",
                 "ident": "true",
                 "q.op": "OR",
                 "defType": "edismax",
-                "bq": "isEdutrain:true^1000",
-                "qf": "title^1 keyword^50 collector",
-                "fl": "*, [child author]",
+                "qf": "title^1 keyword^50 description",
+                "fl": "*",
                 "fq": "type:\"http://www.w3.org/ns/dcat#Dataset\"",
-                "rows": 20,
+                "rows": 100,
                 "start": 0,
                 "facet": "true",
-                "facet.field": [
-                    "type",
-                    "subjectArea_str",
-                    "dataAccessType",
-                    "contentType_str",
-                    "dataUploadType",
-                    "supportsMetadataStandard_str",
-                    "software_license_str",
-                    "assignsIdentifierScheme"
-                ],
                 "facet.range": "datePublished",
                 "facet.range.start": "2000-01-01T00:00:00Z",
                 "facet.range.end": "2024-01-01T00:00:00Z",
@@ -52,7 +24,13 @@
                     "response",
                     "docs"
                 ]
-            }
+            },
+            "geometry_field": {
+                "path": [
+                    "geometry_wkt"
+                ]
+            },
+            "source_url_field": "homepage"
         }
     }
 }
