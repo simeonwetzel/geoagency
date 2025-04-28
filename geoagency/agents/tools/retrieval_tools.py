@@ -1,191 +1,295 @@
+import logging
 from smolagents import tool, Tool
 from loguru import logger
 from geoagency.agents.retriever.retriever import RepoRetriever
-# Import necessary for agent reference if needed, or handle state differently
-# from __main__ import MetadataRetrieverAgent # Example if agent class is in the main script
-from typing import Any, Dict, List, Optional, Tuple
-import asyncio
+from typing import Any, Dict, List, Optional
+import json
 
-# Keep the MetadataRetrieverTool largely the same as the previous CodeAgent revision
+
 class MetadataRetrieverTool(Tool):
     name = "retrieve_metadata"
     description = """
-    Retrieves dataset metadata from configured repositories based on a list of search queries.
-    Use like: retrieve_metadata(queries=["search term 1", "query about topic X"])
-    Returns a text summary of top results found for the agent to observe.
-    Full structured results are stored internally for subsequent processing (like top-10 selection).
+    Retrieve metadata for datasets relevant to a user query. 
+    This tool collects metadata from multiple repositories using RepoRetriever. 
+    It is the first step in the search process and should be called before selecting top results.
+    
+    Instructions:
+    - Create a list of at least 5 queries to search for datasets.    
+    - Never use operators like 'AND', 'OR', 'NOT' in the queries, as they are not supported.
+    
+    Example: retrieve_metadata(queries=["climate data", "temperature records", "sea level measurements"])
+    
+    The output is a result dict with keys for all queries. The values for each of these keys are a list of dicts including the results for the certain query. 
     """
+
     inputs = {
         "queries": {
             "type": "object",
-            "description": "List with query strings to search for.",
+            "description": "List of query strings to search for datasets."
         }
     }
-    output_type = "string"
+
+    output_type = "object"
 
     def __init__(self, retriever: RepoRetriever):
         super().__init__()
         self.retriever = retriever
-        self.last_full_results: Optional[Dict[str, List[Dict[str, Any]]]] = None
-        self.agent_instance = None
-
-    def set_agent_instance(self, agent):
-         self.agent_instance = agent
-
-    def _format_summary(self, search_results: Dict[str, List[Dict[str, Any]]]) -> str:
-        # (Implementation remains the same - unchanged)
-        if not search_results:
-            return "No results found for the given queries."
-        summary_lines = []
-        total_found = sum(len(v) for v in search_results.values())
-        results_shown_count = 0
-        max_summary_results = 5
-        for query, results in search_results.items():
-            if results:
-                summary_lines.append(f"--- Top Results Summary for '{query}' ---")
-                for result in results[:max_summary_results]:
-                    if results_shown_count >= max_summary_results: break
-                    title = result.get('text', 'No description')[:100]
-                    source = result.get('source', '#')
-                    result_id = result.get('id', 'N/A')
-                    region = result.get('geometry_geojson', None)
-                    region_info = f"Region: {region}" if region else "Region: Not specified"
-                    summary_lines.append(f"- Title: {title}...\n  Source: {source}\n  ID: {result_id}\n  {region_info}")
-                    results_shown_count += 1
-            if results_shown_count >= max_summary_results: break
-        if not summary_lines: return "No results found."
-        summary_lines.append(f"\n(Summary includes top {results_shown_count} of {total_found} total results. Full results stored for potential top-10 selection.)")
-        return "\n".join(summary_lines)
-
-
-    async def _run_retrieval(self, queries: List[str]) -> Dict[str, List[Dict[str, Any]]]:
-        # (Implementation remains the same - async retrieval - unchanged)
-        try:
-            response = await self.retriever.query_multiple_repos(queries=queries, limit=20)
-            return response
-        except Exception as e:
-            logger.error(f"Error during async metadata retrieval call: {e}")
-            return {}
+        self.last_full_results: Optional[List[Dict[str, Any]]] = None
 
     def forward(self, queries: List[str]) -> str:
         """
-        Executes the metadata search synchronously, handling potential running event loops.
-        Stores full results, and returns a summary string.
+        Calls the retriever to collect metadata for the query.
+        Stores the results and returns a short summary.
         """
         logger.info(f"Retrieving metadata for queries: {queries}")
-        self.last_full_results = None # Reset before call
-        response = {}
 
-        import asyncio
-        response = asyncio.run(self.retriever.query_multiple_repos(queries=queries, limit=5))
+        try:
+            # Call the retriever (assume it returns a list of dicts)
+            import asyncio
+            results = asyncio.run(
+                self.retriever.query_multiple_repos(queries=queries, limit=4))
 
-        # Store full results on the instance FOR THE CALLBACK TO PICK UP
-        self.last_full_results = response
-        count = sum(len(v) for v in response.values()) if response else 0
-        logger.info(f"Stored {count} total results internally for callback.")
+            if not results:
+                self.last_full_results = []
+                logger.warning("No results found for the query.")
+                return "No datasets found matching the query."
 
-        # Format and return the summary string for the agent's observation
-        formatted_summary = self._format_summary(response)
-        logger.debug(f"Returning summary for agent observation: {formatted_summary}")
-        return formatted_summary
+            self.last_full_results = results
 
-# --- NEW TOOL ---
+            count = sum(len(v) for v in results.values()) if results else 0
+            logger.info(f"Retrieved {count} metadata records.")
+            return results
+
+        except Exception as e:
+            logger.exception("Failed to retrieve metadata.")
+            return f"Error during metadata retrieval: {str(e)}"
+
+
+logger = logging.getLogger(__name__)
+
+
 class SelectTop10ResultsTool(Tool):
     name = "select_top_10_results"
     description = """
-    Selects exactly the top 10 most relevant search results from the full set previously retrieved.
-    Requires the original user query to assess relevance.
-    Use AFTER 'retrieve_metadata' has been successfully called.
-    Example call: select_top_10_results(original_query="user's initial question")
-    Returns a message indicating success. The structured top 10 list is stored internally.
+    Selects and formats the top 10 most relevant datasets based on metadata search results collected previously.
+    It uses an LLM to rank and select from the full results based on the original user query.
+
+    Always call `retrieve_metadata` first to populate the necessary results.
+    This tool handles both selection and formatting.
+
+    The output is a dictionary containing:
+    - 'message': A status message.
+    - 'results': A list of the top 10 selected result dictionaries (structured data).
+    - 'formatted_results': A string containing the formatted top 10 results, ready for display to the user.
+
+    Example usage (Agent code generation):
+    select_top_10_results(original_query="climate data germany")
     """
     inputs = {
         "original_query": {
             "type": "string",
-            "description": "The original query submitted by the user.",
-        }
-        # Note: We are NOT taking full_results as input here, see forward() implementation
+            "description": "The original query provided by the user, used for relevance ranking.",
+        },
+        # Removed selected_results as input - relying on LLM selection based on full results
+        # If manual selection is needed, it would require a different logic flow or tool.
     }
-    output_type = "string" # Output simple confirmation message
+    output_type = "object"  # Returning an object with message, results list, and formatted string
 
-    def __init__(self):
+    def __init__(self, llm: Any): # LLM is required for this tool's primary function now
+        """
+        Initializes the tool with an LLM for automatic selection and ranking.
+        Requires access to the full results gathered by MetadataRetrieverTool via agent state.
+        """
         super().__init__()
-        self.agent_instance = None # Will hold the agent instance
+        if llm is None:
+             # Making LLM mandatory for this tool's logic
+             raise ValueError("SelectTop10ResultsTool requires an LLM instance.")
+        self.llm = llm
+        # These attributes are primarily for the callback mechanism in the Agent class
         self.last_top_10_results: Optional[List[Dict[str, Any]]] = None
+        # This tool now relies on the agent providing the full results implicitly via state
+        # or potentially passed explicitly if agent design changes. Let's assume agent passes it.
+        # For smolagents, the agent usually passes relevant context or the tool fetches from agent state if needed.
+        # We'll modify the agent's `run` or prompt to ensure results are available.
+        # For simplicity here, let's assume the agent's full_search_results are accessible
+        # This requires the agent instance or the results to be passed.
+        # Let's refine this: the tool *shouldn't* rely on implicit agent state.
+        # The agent should pass the necessary data.
 
-    def set_agent_instance(self, agent):
-         # Method for the agent to provide its instance reference during setup
-         self.agent_instance = agent
+    # Revised forward method signature if agent passes data:
+    # def forward(self, original_query: str, full_results_dict: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
 
-    def _simple_relevance_logic(self, full_results: Dict[str, List[Dict[str, Any]]], query: str) -> List[Dict[str, Any]]:
+    # Assuming the agent framework makes the full_results_dict available somehow (e.g. via a context arg or agent reference):
+    # Let's stick to the original idea that the agent runs retrieve_metadata first, and *then* runs this tool.
+    # This tool *could* access the agent's state if set up (using set_agent_instance pattern),
+    # or the agent could pass the flattened list in the call.
+    # Let's assume the agent needs to pass the flattened list derived from its self.full_search_results.
+    # MODIFYING TOOL SIGNATURE AND AGENT PROMPT ACCORDINGLY
+
+    # --> Change Tool Description/Inputs
+    description = """
+    Selects and formats the top 10 most relevant datasets from a provided list of results.
+    It uses an LLM to rank and select based on the original user query.
+
+    **Requires a flattened list of all search results obtained from `retrieve_metadata`.**
+
+    The output is a dictionary containing:
+    - 'message': A status message.
+    - 'results': A list of the top 10 selected result dictionaries (structured data).
+    - 'formatted_results': A string containing the formatted top 10 results, ready for display to the user.
+
+    Example usage (Agent code generation):
+    # Assumes 'all_results_list' was previously created by flattening output from 'retrieve_metadata'
+    select_top_10_results(original_query="climate data germany", all_results=all_results_list)
+    """
+    inputs = {
+        "original_query": {
+            "type": "string",
+            "description": "The original query provided by the user, used for relevance ranking.",
+        },
+        "all_results": {
+            "type": "object", # Should be array of objects
+            "description": "A flattened list containing ALL metadata result dictionaries gathered previously.",
+        }
+    }
+
+    def forward(self, original_query: str, all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Basic logic: Combine all results, maybe prioritize based on keywords, return top 10.
-        (This can be replaced with more sophisticated LLM-based re-ranking if needed)
+        Uses an LLM to select the top 10 most relevant results from the provided list
+        based on the original query, and formats them.
         """
-        if not full_results:
-            return []
+        logger.info(f"Selecting top 10 results for query: '{original_query}' from {len(all_results)} candidates.")
 
-        combined_results = []
-        for q_results in full_results.values():
-            combined_results.extend(q_results)
+        if not all_results:
+            error_msg = "Error: No search results provided to select from. Ensure `retrieve_metadata` ran successfully and results were passed."
+            logger.error(error_msg)
+            self.last_top_10_results = []
+            return {"message": error_msg, "results": [], "formatted_results": "No results to display."}
 
-        # Simple approach: Assume retriever's order is decent, just take top 10 overall.
-        # Add basic keyword check for demonstration (optional enhancement)
-        query_keywords = set(query.lower().split())
-        def score_result(result):
-            text_score = 0
-            text = result.get('text', '').lower()
-            if text:
-                text_score = sum(1 for keyword in query_keywords if keyword in text)
-            # Could add more scoring based on title, etc.
-            return text_score # Higher score is better
+        # Prepare data for LLM - maybe select key fields to reduce prompt size
+        # For now, send essential parts of the first N results (e.g., 50) to avoid overly large prompts
+        max_results_for_llm = 50
+        results_subset = all_results[:max_results_for_llm]
 
-        # Sort primarily by score (desc), then rely on original order as tie-breaker (implicitly)
-        # This is still very basic relevance.
+        # Extract relevant text for ranking (handle potential missing keys)
+        def extract_text(res):
+            title = res.get('meta', {}).get('title', [''])[0] if isinstance(res.get('meta', {}).get('title'), list) else res.get('meta', {}).get('title', '')
+            desc = res.get('meta', {}).get('description', [''])[0] if isinstance(res.get('meta', {}).get('description'), list) else res.get('meta', {}).get('description', '')
+            text_field = res.get('text', '') # The combined field from retriever
+            # Combine relevant fields for the LLM to consider
+            combined = f"ID: {res.get('id', 'N/A')}\nTitle: {title}\nDescription: {desc}\nDetails: {text_field}"
+            return combined
+
+        results_for_prompt = [extract_text(res) for res in results_subset]
+        # Include original index to map back LLM selection to full result dict
+        indexed_results_for_prompt = [{"original_index": i, "content": text} for i, text in enumerate(results_for_prompt)]
+
         try:
-            # Add index to preserve original relative order for stability if scores are equal
-            indexed_results = list(enumerate(combined_results))
-            sorted_results_with_indices = sorted(indexed_results, key=lambda item: score_result(item[1]), reverse=True)
-            # Extract original results in the new order
-            sorted_results = [item[1] for item in sorted_results_with_indices]
+            prompt = f"""
+You are an expert relevance ranker for scientific datasets.
+Based on the user query: '{original_query}'
+
+Review the following dataset summaries (limited to the first {len(indexed_results_for_prompt)}):
+{json.dumps(indexed_results_for_prompt, indent=2)}
+
+Select the top 10 most relevant datasets. Return ONLY a JSON list containing the 'original_index' of the top 10 selected items, ordered from most to least relevant.
+Example Response Format: [5, 23, 1, 15, 49, 0, 8, 12, 33, 4]
+"""
+            # Ensure your LLMManager call syntax is correct
+            llm_response_raw = self.llm.chat(prompt=prompt) # Adjust based on your LLMManager method
+            llm_response_content = llm_response_raw # Assuming direct content string, adjust if nested
+
+            logger.debug(f"LLM response for ranking: {llm_response_content}")
+
+            # Parse the LLM response (expecting a list of indices)
+            try:
+                selected_indices = json.loads(llm_response_content)
+                if not isinstance(selected_indices, list) or not all(isinstance(i, int) for i in selected_indices):
+                     raise ValueError("LLM response is not a valid list of integers.")
+            except (json.JSONDecodeError, ValueError) as parse_error:
+                logger.error(f"Failed to parse LLM ranking response: {parse_error}")
+                logger.error(f"LLM Raw Response was: {llm_response_content}")
+                # Fallback or error handling: maybe take the first 10 raw results?
+                selected_indices = list(range(min(10, len(all_results)))) # Fallback to first 10
+                error_msg = f"Error parsing LLM ranking, using first {len(selected_indices)} results as fallback."
+                logger.warning(error_msg)
+
+
+            # Map indices back to the original full results dictionaries
+            # Ensure indices are within the bounds of the subset used
+            valid_indices = [idx for idx in selected_indices if 0 <= idx < len(results_subset)]
+            top_10_selection = [results_subset[idx] for idx in valid_indices][:10] # Get top 10 valid
+
+
+            self.last_top_10_results = top_10_selection # Store the structured results
+            formatted_string = self._format_results(top_10_selection) # Format the selected results
+
+            return {
+                "message": f"Successfully selected and formatted top {len(top_10_selection)} results using LLM.",
+                "results": self.last_top_10_results,
+                "formatted_results": formatted_string
+            }
+
         except Exception as e:
-            logger.warning(f"Could not apply keyword scoring, falling back to original order: {e}")
-            sorted_results = combined_results # Fallback
+            logger.exception("LLM automatic selection failed.")
+            # Fallback: return first 10 raw results if available
+            fallback_results = all_results[:10]
+            self.last_top_10_results = fallback_results
+            formatted_fallback = self._format_results(fallback_results)
+            return {
+                "message": f"Error during automatic selection: {str(e)}. Returning first {len(fallback_results)} raw results as fallback.",
+                "results": fallback_results,
+                "formatted_results": formatted_fallback
+            }
 
-        return sorted_results[:10] # Return exactly top 10 (or fewer if less available)
-
-    def forward(self, original_query: str) -> str:
+    def _format_results(self, results: List[Dict[str, Any]]) -> str:
         """
-        Selects top 10 results based on relevance to the original query.
-        Relies on accessing the agent's state for full results.
+        Formats the selected top results into a user-friendly string.
+        Attempts to extract common metadata fields, handling potential nesting and missing keys.
         """
-        logger.info(f"Selecting top 10 results relevant to query: '{original_query}'")
-        if not self.agent_instance:
-             logger.error("Agent instance reference not set in SelectTop10ResultsTool.")
-             return "Error: Tool configuration issue (agent instance missing)."
-        if not hasattr(self.agent_instance, 'full_search_results') or not self.agent_instance.full_search_results:
-             logger.warning("No full search results found on the agent instance to select from.")
-             return "Warning: No search results available to select from. Did 'retrieve_metadata' run successfully?"
+        if not results:
+            return "No results selected or available to format."
 
-        # Access full results stored on the agent instance
-        full_results = self.agent_instance.full_search_results
+        formatted_string = "Here are the top relevant datasets found:\n\n"
+        for i, result in enumerate(results):
+            # Use .get() with defaults and handle potential list wrapping
+            meta = result.get('meta', {}) if isinstance(result.get('meta'), dict) else {}
 
-        # Apply relevance logic
-        top_10 = self._simple_relevance_logic(full_results, original_query)
+            # Safely extract title
+            title_raw = meta.get('title', ['N/A'])
+            title = title_raw[0] if isinstance(title_raw, list) and title_raw else str(title_raw)
 
-        # Store for the callback
-        self.last_top_10_results = top_10
-        logger.info(f"Stored {len(top_10)} results in last_top_10_results.")
+            # Safely extract source (using homepage as link/source)
+            source_raw = meta.get('homepage', ['N/A'])
+            source = source_raw[0] if isinstance(source_raw, list) and source_raw else str(source_raw)
+            # Fallback to 'source' field if 'homepage' is missing
+            if source == 'N/A':
+                 source_raw = result.get('source', ['N/A']) # Check top level
+                 source = source_raw[0] if isinstance(source_raw, list) and source_raw else str(source_raw)
 
-        return f"Successfully selected and stored the top {len(top_10)} most relevant results."
+            # Safely extract description
+            desc_raw = meta.get('description', ['No description available.'])
+            description = desc_raw[0] if isinstance(desc_raw, list) and desc_raw else str(desc_raw)
 
-# check_search_criteria_completeness tool remains the same
+            # Safely extract ID
+            result_id = result.get('id', 'N/A')
+
+            formatted_string += f"--- Result {i + 1} ---\n"
+            formatted_string += f"  ID: {result_id}\n"
+            formatted_string += f"  Title: {title}\n"
+            formatted_string += f"  Link/Source: {source}\n"
+            formatted_string += f"  Description: {description}\n\n"
+
+        return formatted_string.strip()
+
+
+
 @tool
 def check_search_criteria_completeness(search_criteria_spatial: str = None,
                                        search_criteria_temporal: str = None,
                                        search_criteria_thematic: str = None,
-                                       spatial_criteria_necessary: bool = None,
-                                       temporal_criteria_necessary: bool = None) -> str:
+                                       spatial_criteria_helpful: bool = None,
+                                       temporal_criteria_helpful: bool = None) -> str:
     """
     Validates if the search criteria provided or inferred from the query are sufficient.
     The agent should infer the necessary components based on the user's request.
@@ -194,8 +298,8 @@ def check_search_criteria_completeness(search_criteria_spatial: str = None,
         search_criteria_spatial: The spatial component identified (e.g., "Germany", "bbox [...]").
         search_criteria_temporal: The temporal component identified (e.g., "from 2020 onwards", "specific date").
         search_criteria_thematic: The core topic identified (e.g., "precipitation", "soil moisture").
-        spatial_criteria_necessary: Agent's assessment if spatial info is crucial for this query (True/False).
-        temporal_criteria_necessary: Agent's assessment if temporal info is crucial for this query (True/False).
+        spatial_criteria_helpful: Agent's assessment if further spatial context could improve the search for this query (True/False).
+        temporal_criteria_helpful: Agent's assessment if further temporal context could improve the search for this query (True/False).
 
     Returns:
         A message indicating whether the search criteria are complete or suggesting what is missing or unclear.
@@ -204,10 +308,10 @@ def check_search_criteria_completeness(search_criteria_spatial: str = None,
     if not search_criteria_thematic:
         missing_criteria.append("thematic information (what kind of data?)")
 
-    if spatial_criteria_necessary and not search_criteria_spatial:
+    if spatial_criteria_helpful and not search_criteria_spatial:
         missing_criteria.append("spatial information (where?)")
 
-    if temporal_criteria_necessary and not search_criteria_temporal:
+    if temporal_criteria_helpful and not search_criteria_temporal:
         missing_criteria.append("temporal information (when?)")
 
     if not missing_criteria:
