@@ -15,4 +15,6 @@ logger.info("Retriever initialized")
 
 list_queries = ["precipitation"]
 
-asyncio.run(retriever.query_multiple_repos(queries=list_queries, limit=5))
+results = asyncio.run(retriever.query_multiple_repos(queries=list_queries, limit=5))
+
+print(results)

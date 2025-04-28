@@ -27,8 +27,8 @@ app = FastAPI()
 
 
 @app.get("/test_llm")
-def read_root(query: str) -> dict:
-    answer, search_results = call_agent(query)
+def read_root(query: str, use_follow_ups: str) -> dict:
+    answer, search_results = call_agent(query, use_follow_ups)
     # logger.debug(f"State: {logs}")
     return {"answer": answer, 
             "search_results": search_results}
