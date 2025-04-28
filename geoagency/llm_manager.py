@@ -17,7 +17,7 @@ class LLMManager:
 
                 cls._llm_instance = HfApiModel(
                     model_id=llm_config.get("model_id", "Qwen/Qwen2.5-Coder-32B-Instruct"),
-                    token=llm_config.get("api_token", None),
+                    token=llm_config.get("HF_API_KEY"),
                     max_tokens=llm_config.get("max_tokens", 1000),
                     temperature=llm_config.get("temperature", 0.5)
                 )
@@ -27,8 +27,9 @@ class LLMManager:
 
                 cls._llm_instance = LiteLLMModel(
                     model_id=llm_config.get("model_id", "openai/gpt-4o-mini"),
-                    token=llm_config.get("api_base", "https://api.openai.com/v1"),
-                    max_tokens=llm_config.get("temperature", 0.5),
+                    #token=llm_config.get("api_base", "None"),
+                    #max_tokens=llm_config.get("max_tokens", 1000),
+                    #temperature=llm_config.get("temperature", 0.5),
                     api_key=os.environ["OPENAI_API_KEY"]
                 )
             """
