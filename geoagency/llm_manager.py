@@ -32,6 +32,17 @@ class LLMManager:
                     #temperature=llm_config.get("temperature", 0.5),
                     api_key=os.environ["OPENAI_API_KEY"]
                 )
+            if llm_config.get("provider") == "groq":
+                logger.info("Using Groq LLM provider")
+                from smolagents import LiteLLMModel    
+
+                cls._llm_instance = LiteLLMModel(
+                    model_id=llm_config.get("model_id", "groq/llama3-70b-8192"),
+                    #token=llm_config.get("api_base", "None"),
+                    #max_tokens=llm_config.get("max_tokens", 1000),
+                    #temperature=llm_config.get("temperature", 0.5),
+                    api_key=llm_config.get("GROQ_API_KEY")
+                )
             """
             if llm_config.get("provider") == "openai":
                 logger.info("Using OpenAI LLM provider")

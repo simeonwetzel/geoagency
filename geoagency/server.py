@@ -10,7 +10,8 @@ from .config.config import (
     resolve_abs_path
 )
 
-from .agents.smolagent_base import call_agent
+# from .agents.smolagent_base import call_agent
+from .agents.agent_based_approach import call_agent
 # from .agents.agent_factory import call_agent as call_agency
 from .agents.deterministic_approach import call_agent as call_deterministic
 

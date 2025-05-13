@@ -6,7 +6,7 @@ from flashrank import Ranker, RerankRequest
 import time
 import shapely
 from ...config.config import CONFIG
-from typing import Any
+from typing import Any, Dict, List, Optional, Union
 import urllib
 import json
 
@@ -54,6 +54,7 @@ class RepoRetriever:
                 method=repo_config.get("method", "GET"),
                 response_keys=repo_config.get("response_keys"),
                 geometry_field=repo_config.get("geometry_field"),
+                geometry_coordinate_order=repo_config.get("geometry_coordinate_order", "lat_lon"), 
                 source_url_field=repo_config.get("source_url_field"),
                 field_mapping=repo_config.get("field_mapping"),
                 query_format=query_format,
@@ -69,6 +70,7 @@ class RepoRetriever:
                  method: str = None,
                  response_keys: list = None,
                  geometry_field: list = None,
+                 geometry_coordinate_order: str = None,
                  source_url_field: str = None,
                  field_mapping: dict = None,
                  query_format: str = None,
@@ -86,6 +88,7 @@ class RepoRetriever:
             "response_keys": response_keys or {},
             "field_mapping": field_mapping or {},
             "geometry_field_path": geometry_field or {},
+            "geometry_coordinate_order": geometry_coordinate_order or "lat_lon",
             "source_url_field": source_url_field or "",
             "query_format": query_format or "standard",
             "query_template": query_template
@@ -172,9 +175,16 @@ class RepoRetriever:
                 else:
                     response = requests.post(
                         repo["base_url"], json=params, headers=headers)
+            
+            # Log error if status code is not 200
+            if response.status_code != 200:
+                logger.error(f"Health check for repository '{repo_name}' failed with status code {response.status_code}: {response.text}")
+                return {"status": "unhealthy", "error": f"Status code {response.status_code}", "response": response.text}
+            
             response.raise_for_status()
             return {"status": "healthy"}
         except Exception as e:
+            logger.error(f"Health check for repository '{repo_name}' failed with exception: {str(e)}")
             return {"status": "unhealthy", "error": str(e)}
 
     async def fetch_metadata(self,
@@ -200,19 +210,41 @@ class RepoRetriever:
         try:
             # GET requests
             if repo.get("method").upper() == "GET":
-                return await (await session.get(url, params=constructed, headers=headers)).json()
+                async with session.get(url, params=constructed, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Request to repository '{repo_name}' failed with status code {response.status}: {error_text}")
+                        return {"error": f"Status code {response.status} for {repo_name}", "response": error_text}
+                    response.raise_for_status()
+                    return await response.json()
+            
             # POST requests
             if query_format == "json_template":
                 body = constructed.get("body", {})
                 async with session.post(url, json=body, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Request to repository '{repo_name}' failed with status code {response.status}: {error_text}")
+                        return {"error": f"Status code {response.status} for {repo_name}", "response": error_text}
                     response.raise_for_status()
                     return await response.json()
             else:
                 async with session.post(url, json=constructed, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Request to repository '{repo_name}' failed with status code {response.status}: {error_text}")
+                        return {"error": f"Status code {response.status} for {repo_name}", "response": error_text}
                     response.raise_for_status()
                     return await response.json()
+        except aiohttp.ClientError as ce:
+            logger.error(f"Network error when requesting repository '{repo_name}': {str(ce)}")
+            return {"error": f"Network error for {repo_name}: {str(ce)}"}
+        except ValueError as ve:
+            logger.error(f"JSON parsing error for repository '{repo_name}': {str(ve)}")
+            return {"error": f"JSON parsing error for {repo_name}: {str(ve)}"}
         except Exception as e:
-            return {"error": str(e)}
+            logger.error(f"Unknown error when requesting repository '{repo_name}': {str(e)}")
+            return {"error": f"Unknown error for {repo_name}: {str(e)}"}
 
     async def retrieve_async(self, requests: list) -> dict:
         """
@@ -241,7 +273,22 @@ class RepoRetriever:
                 tasks.append((unique_key, task))
 
             results = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
-            return {key: result for (key, _), result in zip(tasks, results)}
+            
+            # Process and log any exceptions that occurred during gathering results
+            processed_results = {}
+            for (key, _), result in zip(tasks, results):
+                repo_name = key.split(":")[0]
+                if isinstance(result, Exception):
+                    logger.error(f"Exception occurred during request to repository '{repo_name}': {str(result)}")
+                    processed_results[key] = {"error": f"Exception: {str(result)}"}
+                else:
+                    processed_results[key] = result
+                    
+                    # Log if the result contains an error
+                    if isinstance(result, dict) and "error" in result:
+                        logger.error(f"Error in response from repository '{repo_name}': {result['error']}")
+                        
+            return processed_results
 
     async def query_multiple_repos(self, queries: list, limit: int = None) -> dict:
         """
@@ -278,6 +325,13 @@ class RepoRetriever:
 
         for request_key, response in responses.items():
             repo_name, query = request_key.split(":")
+            
+            # Check if the response contains an error
+            if isinstance(response, dict) and "error" in response:
+                logger.error(f"Error in response from repository '{repo_name}' for query '{query}': {response['error']}")
+                query_results[query][repo_name] = []
+                continue
+                
             response_keys = self.repos[repo_name].get(
                 "response_keys", {}).get("path", [])
 
@@ -318,17 +372,33 @@ class RepoRetriever:
 
         return query_results
 
-    def _geometry_to_geojson(self, geometry: Any) -> dict:
-        if geometry:
+    def _geometry_to_geojson(self, geometry: Any, repo_name: str) -> Union[dict, str]:
+        """
+        Convert geometry to GeoJSON format, handling different coordinate orders.
+        
+        :param geometry: Input geometry (WKT string, dict, etc.)
+        :param repo_name: Repository name to determine coordinate order
+        :return: GeoJSON representation of the geometry
+        """
+        if not geometry:
+            return ""
+            
+        # Get coordinate order from repository config
+        coordinate_order = self.repos[repo_name].get("geometry_coordinate_order", "lat_lon")
+        
+        try:
             if isinstance(geometry, str):
-                geometry = shapely.from_wkt(geometry=geometry)
-                return shapely.to_geojson(geometry=geometry)
-            if isinstance(geometry, list):
+                # Handle WKT string
+                geometry_obj = shapely.from_wkt(geometry=geometry)
+                geojson = shapely.to_geojson(geometry=geometry_obj)
+                return self._normalize_coordinate_order(geojson, coordinate_order)
+                
+            elif isinstance(geometry, list):
                 geometry = geometry[0]
+                
             if isinstance(geometry, dict):
                 if 'min' in geometry and 'max' in geometry:
-                    # Assuming geometry is a bounding box like
-                    # {"min": {"x": -17.15, "y": 36.93}, "max": {"x": 42.95, "y": 57.73}}
+                    # Handle bounding box format
                     polygon = shapely.Polygon([
                         # Bottom-left
                         (geometry["min"]["x"], geometry["min"]["y"]),
@@ -336,14 +406,118 @@ class RepoRetriever:
                         (geometry["max"]["x"], geometry["min"]["y"]),
                         # Top-right
                         (geometry["max"]["x"], geometry["max"]["y"]),
-                        (geometry["min"]["x"],
-                         geometry["max"]["y"]),  # Top-left
+                        (geometry["min"]["x"], geometry["max"]["y"]),  # Top-left
                         # Close the polygon
                         (geometry["min"]["x"], geometry["min"]["y"])
                     ])
-                    return shapely.to_geojson(geometry=polygon)
-            return ''
+                    geojson = shapely.to_geojson(geometry=polygon)
+                    return self._normalize_coordinate_order(geojson, coordinate_order)
+                elif 'type' in geometry and 'coordinates' in geometry:
+                    # Already in GeoJSON format
+                    return self._normalize_coordinate_order(geometry, coordinate_order)
+                    
+        except Exception as e:
+            logger.error(f"Error converting geometry to GeoJSON for repo {repo_name}: {str(e)}")
+            
+        return ""
 
+    def _normalize_coordinate_order(self, geojson_dict: Union[dict, str], source_order: str) -> dict:
+        """
+        Normalize coordinate order in GeoJSON to always use [lat, lon] order.
+        
+        :param geojson_dict: GeoJSON dictionary or string
+        :param source_order: Source coordinate order ('lon_lat' or 'lat_lon')
+        :return: Normalized GeoJSON dictionary
+        """
+        # Convert string to dict if needed
+        if isinstance(geojson_dict, str):
+            try:
+                geojson_dict = json.loads(geojson_dict)
+            except json.JSONDecodeError:
+                logger.error("Failed to parse GeoJSON string")
+                return geojson_dict
+                
+        # If coordinates are already in [lon, lat] order, return as is
+        if source_order == "lat_lon":
+            return geojson_dict
+            
+        # Handle Feature object
+        if 'type' in geojson_dict and geojson_dict['type'] == 'Feature':
+            geometry = geojson_dict.get('geometry', {})
+            if not geometry:
+                return geojson_dict
+            geojson_dict['geometry'] = self._swap_coordinates(geometry)
+            return geojson_dict
+            
+        # Handle direct geometry object
+        if 'type' in geojson_dict and 'coordinates' in geojson_dict:
+            return self._swap_coordinates(geojson_dict)
+            
+        return geojson_dict
+
+    def _swap_coordinates(self, geometry: dict) -> dict:
+        """
+        Swap coordinates in a GeoJSON geometry from [lat, lon] to [lon, lat] or vice versa.
+        
+        :param geometry: GeoJSON geometry object
+        :return: Geometry with swapped coordinates
+        """
+        geom_type = geometry.get('type', '')
+        coordinates = geometry.get('coordinates', [])
+        
+        if geom_type == 'Point':
+            if len(coordinates) >= 2:
+                geometry['coordinates'] = [coordinates[1], coordinates[0]]
+                
+        elif geom_type == 'LineString' or geom_type == 'MultiPoint':
+            geometry['coordinates'] = [[coord[1], coord[0]] for coord in coordinates]
+            
+        elif geom_type == 'Polygon' or geom_type == 'MultiLineString':
+            geometry['coordinates'] = [[[coord[1], coord[0]] for coord in ring] for ring in coordinates]
+            
+        elif geom_type == 'MultiPolygon':
+            geometry['coordinates'] = [[[[coord[1], coord[0]] for coord in ring] for ring in polygon] for polygon in coordinates]
+            
+        return geometry
+
+    def validate_geometry(self, geojson_str: Union[str, dict]) -> bool:
+        """
+        Validate if a GeoJSON string is correctly formatted.
+        
+        :param geojson_str: GeoJSON string or dictionary
+        :return: True if valid, False otherwise
+        """
+        if not geojson_str:
+            return False
+            
+        try:
+            if isinstance(geojson_str, str):
+                geojson_dict = json.loads(geojson_str)
+            else:
+                geojson_dict = geojson_str
+                
+            # Check if it's a valid GeoJSON
+            if 'type' not in geojson_dict:
+                return False
+                
+            # Basic check for coordinates (could be expanded)
+            if 'coordinates' in geojson_dict:
+                coords = geojson_dict['coordinates']
+                if not coords:
+                    return False
+            elif 'geometry' in geojson_dict and 'coordinates' in geojson_dict['geometry']:
+                coords = geojson_dict['geometry']['coordinates']
+                if not coords:
+                    return False
+            else:
+                return False
+                
+            return True
+            
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logger.error(f"GeoJSON validation error: {str(e)}")
+            return False
+        
     def format_response(self, response: Any, repo_name: str) -> list:
         """
         Format the response from a repository.
@@ -399,12 +573,26 @@ class RepoRetriever:
             for key, item in response.items():
                 resolved_id = get_id(item, key)
                 item["id"] = resolved_id
+                
+                # Get geometry and convert to GeoJSON
+                geom = get_nested_value(item, geometry_field_path)
+                geojson = self._geometry_to_geojson(geom, repo_name)
+                
+                # Validate the geometry
+                if geojson:
+                    if self.validate_geometry(geojson):
+                        geojson = json.dumps(geojson)  # Ensure it's a string
+                    else:
+                        logger.warning(f"Invalid geometry detected for item {resolved_id} in repo {repo_name}")
+                        geojson = ""
+                    
+                
 
                 results.append({
                     "id": resolved_id,
                     "source": item.get(source_url_field) or repo_name,
                     "text": f"{get_first(item, title_fields)} - {get_first(item, description_fields)}".strip(" -"),
-                    "geometry_geojson": self._geometry_to_geojson(get_nested_value(item, geometry_field_path)) or "",
+                    "geometry_geojson": geojson,
                     "meta": item,
                 })
 
@@ -413,12 +601,24 @@ class RepoRetriever:
             for item in response:
                 resolved_id = get_id(item, None)
                 item["id"] = resolved_id
+                
+                # Get geometry and convert to GeoJSON
+                geom = get_nested_value(item, geometry_field_path)
+                geojson = self._geometry_to_geojson(geom, repo_name)
+                
+                # Validate the geometry
+                if geojson:
+                    if self.validate_geometry(geojson):
+                        geojson = json.dumps(geojson)  # Ensure it's a string
+                    else:
+                        logger.warning(f"Invalid geometry detected for item {resolved_id} in repo {repo_name}")
+                        geojson = ""
 
                 results.append({
                     "id": resolved_id,
                     "source": item.get(source_url_field) or repo_name,
                     "text": f"{get_first(item, title_fields)} - {get_first(item, description_fields)}".strip(" -"),
-                    "geometry_geojson": self._geometry_to_geojson(get_nested_value(item, geometry_field_path)) or "",
+                    "geometry_geojson": geojson,
                     "meta": item,
                 })
 
@@ -481,6 +681,11 @@ class RepoRetriever:
             repo_name, query = request.split(":")
             logger.info(
                 f"Processing response for repo: {repo_name}, query: {query}")
+                
+            # Check if the response contains an error
+            if isinstance(response, dict) and "error" in response:
+                logger.error(f"Error in response from repository '{repo_name}' for query '{query}': {response['error']}")
+                continue
 
             # Get the response keys (path) for the repo
             response_keys = self.repos.get(repo_name, {}).get(

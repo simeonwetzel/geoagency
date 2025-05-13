@@ -26,13 +26,13 @@ class Config:
         
         # optional API KEY overrides from env
         # self.sdsa_api_key = os.getenv("SDSA_API_KEY", self.sdsa_api_key)
-        self.openai_api_key = os.getenv("OPENAI_API_KEY", self.openai_api_key)
-        self.tavily_api_key = os.getenv("TAVILY_API_KEY", self.tavily_api_key)
-        self.groq_api_key = os.getenv("GROQ_API_KEY", self.groq_api_key)
+        self.llm["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", self.openai_api_key)
+        self.llm["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY", self.tavily_api_key)
+        self.llm["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", self.groq_api_key)
         
         # LLM provider
-        self.llm = self.llm
-        if self.llm.get("provider") not in ["huggingface", "openai"]:
+        
+        if self.llm.get("provider") not in ["huggingface", "groq", "openai"]:
             logger.error(f"Invalid LLM provider: {self.llm.get('provider')}")
             raise ValueError(f"Invalid LLM provider: {self.llm.get('provider')}. Must be 'huggingface' or 'openai'")
         
